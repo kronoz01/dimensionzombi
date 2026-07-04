@@ -93,21 +93,31 @@ def find_recent_video_ids(data: dict, limit: int = 6) -> list:
         return []
 
 
+TARGET_USERNAME = "dimensionzombiclubdehor"
+
+
 def get_recent_video_ids_via_ytdlp(limit: int = 6) -> list:
     """Usa yt-dlp (herramienta externa, mantenida activamente para seguir
     funcionando con los cambios de TikTok/YouTube/etc) para listar los
     videos más recientes del perfil, sin descargar ningún video, solo
     metadatos en formato JSON (--flat-playlist --dump-json).
 
-    Devuelve una lista vacía si yt-dlp no está disponible o falla, para que
-    el llamador pueda usar el método de respaldo."""
+    IMPORTANTE: TikTok a veces devuelve una página genérica ("para ti")
+    en vez del perfil pedido cuando detecta tráfico automatizado. Por eso
+    cada video se valida contra TARGET_USERNAME antes de aceptarlo; si
+    ninguno coincide, se descarta todo el resultado como sospechoso.
+
+    Devuelve una lista vacía si yt-dlp no está disponible, falla, o los
+    resultados no pertenecen al canal correcto — así el llamador usa el
+    método de respaldo o conserva los datos anteriores en vez de publicar
+    contenido equivocado."""
     try:
         proc = subprocess.run(
             [
                 "yt-dlp",
                 "--flat-playlist",
                 "--dump-json",
-                f"--playlist-end={limit}",
+                f"--playlist-end={limit * 2}",  # pedimos de más, por si hay que filtrar
                 "--no-warnings",
                 PROFILE_URL,
             ],
@@ -120,6 +130,7 @@ def get_recent_video_ids_via_ytdlp(limit: int = 6) -> list:
             return []
 
         ids = []
+        rejected = 0
         for line in proc.stdout.strip().splitlines():
             if not line.strip():
                 continue
@@ -127,10 +138,32 @@ def get_recent_video_ids_via_ytdlp(limit: int = 6) -> list:
                 entry = json.loads(line)
             except json.JSONDecodeError:
                 continue
+
+            uploader = str(entry.get("uploader") or entry.get("uploader_id") or "").lower()
             video_id = entry.get("id")
-            if video_id:
-                ids.append(str(video_id))
-        return ids[:limit]
+
+            if not video_id:
+                continue
+            if TARGET_USERNAME.lower() not in uploader:
+                rejected += 1
+                continue
+
+            ids.append(str(video_id))
+            if len(ids) >= limit:
+                break
+
+        if rejected:
+            print(f"⚠️  Se descartaron {rejected} video(s) que no pertenecen a @{TARGET_USERNAME}.", file=sys.stderr)
+
+        if not ids:
+            print(
+                "⚠️  yt-dlp no devolvió ningún video verificado del canal correcto "
+                "(posible bloqueo o página genérica de TikTok). Se descarta el resultado.",
+                file=sys.stderr,
+            )
+            return []
+
+        return ids
 
     except FileNotFoundError:
         print("yt-dlp no está instalado en este entorno.", file=sys.stderr)
